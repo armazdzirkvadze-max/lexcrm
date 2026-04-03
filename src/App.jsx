@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, createContext, useContext } from "react";
 import { auth, db, storage } from "./firebase";
+import translations from "./translations";
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
@@ -31,6 +32,14 @@ import {
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const inviteCode = () => Math.random().toString(36).slice(2, 8).toUpperCase();
+
+// ─── Language System ───
+const LangContext = createContext();
+function useLang() { return useContext(LangContext); }
+function t(lang, key) { return translations[lang]?.[key] || translations.en[key] || key; }
+
+const langNames = { en: "English", ka: "ქართული", ru: "Русский", tr: "Türkçe" };
+const langFlags = { en: "🇬🇧", ka: "🇬🇪", ru: "🇷🇺", tr: "🇹🇷" };
 
 // ─── Icons ───
 const Icons = {
@@ -153,6 +162,17 @@ body, #root { font-family: var(--font); background: var(--bg); color: var(--text
 .search-box svg { width: 16px; height: 16px; color: var(--text-muted); }
 .search-box input { background: none; border: none; outline: none; color: var(--text); font-family: var(--font); font-size: 13px; width: 100%; }
 .search-box input::placeholder { color: var(--text-muted); }
+
+/* Language Switcher */
+.lang-switcher { position: relative; }
+.lang-btn { display: flex; align-items: center; gap: 6px; padding: 7px 12px; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; font-family: var(--font); font-size: 13px; color: var(--text); transition: all 0.15s; }
+.lang-btn:hover { border-color: var(--accent); }
+.lang-btn .flag { font-size: 16px; }
+.lang-dropdown { position: absolute; top: 100%; right: 0; margin-top: 6px; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: 0 8px 30px rgba(0,0,0,0.3); z-index: 50; min-width: 160px; overflow: hidden; }
+.lang-option { display: flex; align-items: center; gap: 10px; padding: 10px 16px; cursor: pointer; font-size: 13px; color: var(--text-secondary); transition: all 0.1s; border: none; background: none; width: 100%; text-align: left; font-family: var(--font); }
+.lang-option:hover { background: var(--bg-card-hover); color: var(--text); }
+.lang-option.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.lang-option .flag { font-size: 16px; }
 .content { padding: 28px 32px; flex: 1; }
 
 /* Cards & Stats */
@@ -586,6 +606,35 @@ function FirmSetupPage({ user, onComplete }) {
         </>}
       </div>
     </div></div>
+  );
+}
+
+// ─── Language Switcher Component ───
+function LanguageSwitcher({ lang, setLang }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+  return (
+    <div className="lang-switcher" ref={ref}>
+      <button className="lang-btn" onClick={() => setOpen(!open)}>
+        <span className="flag">{langFlags[lang]}</span>
+        <span>{langNames[lang]}</span>
+      </button>
+      {open && (
+        <div className="lang-dropdown">
+          {Object.keys(langNames).map((l) => (
+            <button key={l} className={`lang-option ${lang === l ? "active" : ""}`} onClick={() => { setLang(l); setOpen(false); localStorage.setItem("lexcrm-lang", l); }}>
+              <span className="flag">{langFlags[l]}</span>
+              <span>{langNames[l]}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1093,6 +1142,8 @@ export default function App() {
   const [page, setPage] = useState("dashboard");
   const [search, setSearch] = useState("");
   const toast = useToast();
+  const [lang, setLang] = useState(() => localStorage.getItem("lexcrm-lang") || "en");
+  const T = (key) => t(lang, key);
 
   // Auth listener
   useEffect(() => {
@@ -1138,33 +1189,31 @@ export default function App() {
   if (!profile || !profile.firmId) return <><style>{css}</style><FirmSetupPage user={user} onComplete={(fId) => setProfile({ ...profile, firmId: fId })} /></>;
 
   const pages = [
-    { key: "dashboard", label: "Dashboard", icon: Icons.dashboard },
-    { key: "clients", label: "Clients", icon: Icons.clients, count: clients.length },
-    { key: "cases", label: "Cases", icon: Icons.cases, count: cases.filter((c) => c.status !== "Closed").length },
-    { key: "tasks", label: "Tasks", icon: Icons.tasks, count: tasks.filter((t) => t.status !== "Done").length },
-    { key: "billing", label: "Billing", icon: Icons.billing },
-    { key: "calendar", label: "Calendar", icon: Icons.calendar },
-    { key: "team", label: "Team", icon: Icons.team, count: firm?.members?.length },
+    { key: "dashboard", icon: Icons.dashboard },
+    { key: "clients", icon: Icons.clients, count: clients.length },
+    { key: "cases", icon: Icons.cases, count: cases.filter((c) => c.status !== "Closed").length },
+    { key: "tasks", icon: Icons.tasks, count: tasks.filter((t) => t.status !== "Done").length },
+    { key: "billing", icon: Icons.billing },
+    { key: "calendar", icon: Icons.calendar },
+    { key: "team", icon: Icons.team, count: firm?.members?.length },
   ];
-
-  const titles = { dashboard: "Dashboard", clients: "Clients", cases: "Cases", tasks: "Tasks", billing: "Billing", calendar: "Calendar", team: "Team" };
 
   return (
     <><style>{css}</style>
       <div className="app">
         <aside className="sidebar">
-          <div className="sidebar-brand"><h1><span className="brand-icon">{Icons.scale}</span><span>LexCRM</span></h1><p>Legal Practice Manager</p>{firm && <div className="firm-name">{firm.name}</div>}</div>
+          <div className="sidebar-brand"><h1><span className="brand-icon">{Icons.scale}</span><span>LexCRM</span></h1><p>{T("legalPracticeManager")}</p>{firm && <div className="firm-name">{firm.name}</div>}</div>
           <nav className="sidebar-nav">
-            {pages.map((p) => <button key={p.key} className={`nav-item ${page === p.key ? "active" : ""}`} onClick={() => setPage(p.key)}>{p.icon}<span>{p.label}</span>{p.count !== undefined && <span className="nav-badge">{p.count}</span>}</button>)}
+            {pages.map((p) => <button key={p.key} className={`nav-item ${page === p.key ? "active" : ""}`} onClick={() => setPage(p.key)}>{p.icon}<span>{T(p.key)}</span>{p.count !== undefined && <span className="nav-badge">{p.count}</span>}</button>)}
           </nav>
           <div className="sidebar-footer">
             <div className="user-role">{userRole}</div>
             <div className="user-email">{user.email}</div>
-            <button className="nav-item" onClick={handleSignOut}>{Icons.logout}<span>Sign Out</span></button>
+            <button className="nav-item" onClick={handleSignOut}>{Icons.logout}<span>{T("signOut")}</span></button>
           </div>
         </aside>
         <div className="main">
-          <div className="topbar"><h2>{titles[page]}</h2><div className="search-box">{Icons.search}<input placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)} /></div></div>
+          <div className="topbar"><h2>{T(page)}</h2><div style={{ display: "flex", alignItems: "center", gap: 12 }}><div className="search-box">{Icons.search}<input placeholder={T("search")} value={search} onChange={(e) => setSearch(e.target.value)} /></div><LanguageSwitcher lang={lang} setLang={setLang} /></div></div>
           <div className="content">
             {page === "dashboard" && <Dashboard clients={clients} cases={cases} tasks={tasks} billing={billing} events={events} setPage={setPage} />}
             {page === "clients" && <ClientsPage clients={clients} addClient={addClient} updateClient={updateClient} removeClient={removeClient} toast={toast} />}
