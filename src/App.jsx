@@ -4,6 +4,7 @@ import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signOut,
+  sendPasswordResetEmail,
   onAuthStateChanged,
 } from "firebase/auth";
 import {
@@ -247,6 +248,22 @@ tbody tr:last-child td { border-bottom: none; }
 .spinner { width: 40px; height: 40px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* Toast Notifications */
+.toast-container { position: fixed; top: 20px; right: 20px; z-index: 200; display: flex; flex-direction: column; gap: 8px; }
+.toast { padding: 12px 20px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 500; animation: slideIn 0.3s ease; box-shadow: 0 4px 20px rgba(0,0,0,0.3); max-width: 360px; }
+.toast-success { background: var(--green); color: #fff; }
+.toast-error { background: var(--red); color: #fff; }
+@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+/* Confirm Dialog */
+.confirm-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 150; display: flex; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(4px); }
+.confirm-box { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 28px; max-width: 400px; width: 100%; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
+.confirm-box h3 { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+.confirm-box p { font-size: 13px; color: var(--text-secondary); margin-bottom: 20px; }
+.confirm-actions { display: flex; gap: 10px; justify-content: center; }
+.btn-danger-solid { background: var(--red); border-color: var(--red); color: #fff; }
+.btn-danger-solid:hover { background: #dc2626; }
+
 @media (max-width: 900px) {
   .sidebar { width: 64px; min-width: 64px; }
   .sidebar-brand h1 span, .sidebar-brand p, .sidebar-brand .firm-name, .nav-item span, .nav-badge, .sidebar-footer .user-email, .sidebar-footer .user-role { display: none; }
@@ -272,22 +289,76 @@ function useFirestoreCollection(collectionName, firmId) {
     const unsub = onSnapshot(q, (snapshot) => {
       setItems(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })));
       setLoading(false);
+    }, (error) => {
+      console.error(`Error loading ${collectionName}:`, error);
+      setLoading(false);
     });
     return () => unsub();
   }, [collectionName, firmId]);
 
   const addItem = async (item) => {
-    const id = uid();
-    await setDoc(doc(db, collectionName, id), { ...item, id, firmId });
+    try {
+      const id = uid();
+      await setDoc(doc(db, collectionName, id), { ...item, id, firmId });
+      return true;
+    } catch (error) {
+      console.error(`Error adding to ${collectionName}:`, error);
+      throw error;
+    }
   };
   const updateItem = async (item) => {
-    await setDoc(doc(db, collectionName, item.id), { ...item, firmId });
+    try {
+      await setDoc(doc(db, collectionName, item.id), { ...item, firmId });
+      return true;
+    } catch (error) {
+      console.error(`Error updating ${collectionName}:`, error);
+      throw error;
+    }
   };
   const removeItem = async (id) => {
-    await deleteDoc(doc(db, collectionName, id));
+    try {
+      await deleteDoc(doc(db, collectionName, id));
+      return true;
+    } catch (error) {
+      console.error(`Error deleting from ${collectionName}:`, error);
+      throw error;
+    }
   };
 
   return { items, loading, addItem, updateItem, removeItem };
+}
+
+// ─── Toast Notification System ───
+let toastId = 0;
+function useToast() {
+  const [toasts, setToasts] = useState([]);
+  const show = (message, type = "success") => {
+    const id = ++toastId;
+    setToasts((t) => [...t, { id, message, type }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3000);
+  };
+  const ToastContainer = () => (
+    <div className="toast-container">
+      {toasts.map((t) => <div key={t.id} className={`toast toast-${t.type}`}>{t.message}</div>)}
+    </div>
+  );
+  return { show, ToastContainer };
+}
+
+// ─── Confirm Dialog ───
+function ConfirmDialog({ title, message, onConfirm, onCancel }) {
+  return (
+    <div className="confirm-overlay" onClick={onCancel}>
+      <div className="confirm-box" onClick={(e) => e.stopPropagation()}>
+        <h3>{title}</h3>
+        <p>{message}</p>
+        <div className="confirm-actions">
+          <button className="btn" onClick={onCancel}>Cancel</button>
+          <button className="btn btn-danger-solid" onClick={onConfirm}>Delete</button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ─── Auth Page ───
@@ -296,10 +367,12 @@ function AuthPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showReset, setShowReset] = useState(false);
 
   const handleSubmit = async () => {
-    setError("");
+    setError(""); setSuccess("");
     if (!email || !password) { setError("Please fill in all fields."); return; }
     if (password.length < 6) { setError("Password must be at least 6 characters."); return; }
     setLoading(true);
@@ -312,19 +385,45 @@ function AuthPage() {
     }
     setLoading(false);
   };
+
+  const handleReset = async () => {
+    setError(""); setSuccess("");
+    if (!email) { setError("Please enter your email address first."); return; }
+    setLoading(true);
+    try {
+      await sendPasswordResetEmail(auth, email);
+      setSuccess("Password reset email sent! Check your inbox.");
+      setShowReset(false);
+    } catch (err) {
+      setError(err.code === "auth/user-not-found" ? "No account found with this email." : err.message);
+    }
+    setLoading(false);
+  };
+
   const handleKey = (e) => { if (e.key === "Enter") handleSubmit(); };
 
   return (
     <div className="auth-page"><div className="auth-container">
       <div className="auth-brand"><h1>{Icons.scale} LexCRM</h1><p>Legal Practice Manager</p></div>
       <div className="auth-card">
-        <h2>{isLogin ? "Sign In" : "Create Account"}</h2>
-        <p className="subtitle">{isLogin ? "Welcome back" : "Get started for free"}</p>
+        <h2>{showReset ? "Reset Password" : isLogin ? "Sign In" : "Create Account"}</h2>
+        <p className="subtitle">{showReset ? "We'll send you a reset link" : isLogin ? "Welcome back" : "Get started for free"}</p>
         {error && <div className="auth-error">{error}</div>}
+        {success && <div className="auth-success">{success}</div>}
         <div className="form-group"><label>Email</label><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} onKeyDown={handleKey} placeholder="you@lawfirm.com" /></div>
-        <div className="form-group"><label>Password</label><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={handleKey} placeholder="At least 6 characters" /></div>
-        <button className="btn btn-primary btn-full" onClick={handleSubmit} disabled={loading}>{loading ? "Please wait..." : isLogin ? "Sign In" : "Create Account"}</button>
-        <div className="auth-switch">{isLogin ? "Don't have an account? " : "Already have an account? "}<button onClick={() => { setIsLogin(!isLogin); setError(""); }}>{isLogin ? "Sign Up" : "Sign In"}</button></div>
+        {!showReset && <div className="form-group"><label>Password</label><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={handleKey} placeholder="At least 6 characters" /></div>}
+        {showReset ? (
+          <>
+            <button className="btn btn-primary btn-full" onClick={handleReset} disabled={loading}>{loading ? "Sending..." : "Send Reset Email"}</button>
+            <div className="auth-switch"><button onClick={() => { setShowReset(false); setError(""); setSuccess(""); }}>← Back to Sign In</button></div>
+          </>
+        ) : (
+          <>
+            <button className="btn btn-primary btn-full" onClick={handleSubmit} disabled={loading}>{loading ? "Please wait..." : isLogin ? "Sign In" : "Create Account"}</button>
+            {isLogin && <div className="auth-switch" style={{ marginTop: 12, marginBottom: 4 }}><button onClick={() => { setShowReset(true); setError(""); setSuccess(""); }}>Forgot password?</button></div>}
+            <div className="auth-switch">{isLogin ? "Don't have an account? " : "Already have an account? "}<button onClick={() => { setIsLogin(!isLogin); setError(""); setSuccess(""); }}>{isLogin ? "Sign Up" : "Sign In"}</button></div>
+          </>
+        )}
       </div>
     </div></div>
   );
@@ -463,16 +562,30 @@ function Dashboard({ clients, cases, tasks, billing, events, setPage }) {
 }
 
 // ─── Clients ───
-function ClientsPage({ clients, addClient, updateClient, removeClient }) {
+function ClientsPage({ clients, addClient, updateClient, removeClient, toast }) {
   const [modal, setModal] = useState(null); const [form, setForm] = useState({});
+  const [confirmDelete, setConfirmDelete] = useState(null);
   const openNew = () => { setForm({ name: "", email: "", phone: "", company: "", notes: "" }); setModal("new"); };
   const openEdit = (c) => { setForm({ ...c }); setModal("edit"); };
-  const save = async () => { if (!form.name) return; if (modal === "new") await addClient({ ...form, createdAt: new Date().toISOString().split("T")[0] }); else await updateClient(form); setModal(null); };
+  const save = async () => {
+    if (!form.name) return;
+    try {
+      if (modal === "new") { await addClient({ ...form, createdAt: new Date().toISOString().split("T")[0] }); toast.show("Client added"); }
+      else { await updateClient(form); toast.show("Client updated"); }
+      setModal(null);
+    } catch (e) { toast.show("Error saving client", "error"); }
+  };
+  const handleDelete = async () => {
+    try { await removeClient(confirmDelete); toast.show("Client deleted"); } catch (e) { toast.show("Error deleting client", "error"); }
+    setConfirmDelete(null);
+  };
   return (<div>
     <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}><button className="btn btn-primary" onClick={openNew}>{Icons.plus}<span>Add Client</span></button></div>
     <div className="card"><div className="table-wrap"><table><thead><tr><th>Name</th><th>Company</th><th>Email</th><th>Phone</th><th>Since</th><th></th></tr></thead><tbody>
-      {clients.map((c) => (<tr key={c.id}><td style={{ fontWeight: 600 }}>{c.name}</td><td>{c.company}</td><td style={{ color: "var(--text-secondary)" }}>{c.email}</td><td style={{ color: "var(--text-secondary)" }}>{c.phone}</td><td style={{ color: "var(--text-muted)", fontSize: 12 }}>{c.createdAt}</td><td><div className="actions-cell"><button className="btn-icon" onClick={() => openEdit(c)}>{Icons.edit}</button><button className="btn-icon btn-danger" onClick={() => removeClient(c.id)}>{Icons.trash}</button></div></td></tr>))}
+      {clients.map((c) => (<tr key={c.id}><td style={{ fontWeight: 600 }}>{c.name}</td><td>{c.company}</td><td style={{ color: "var(--text-secondary)" }}>{c.email}</td><td style={{ color: "var(--text-secondary)" }}>{c.phone}</td><td style={{ color: "var(--text-muted)", fontSize: 12 }}>{c.createdAt}</td><td><div className="actions-cell"><button className="btn-icon" onClick={() => openEdit(c)}>{Icons.edit}</button><button className="btn-icon btn-danger" onClick={() => setConfirmDelete(c.id)}>{Icons.trash}</button></div></td></tr>))}
+      {clients.length === 0 && <tr><td colSpan={6} className="empty-state">No clients yet — add your first one</td></tr>}
     </tbody></table></div></div>
+    {confirmDelete && <ConfirmDialog title="Delete Client" message="Are you sure you want to delete this client? This action cannot be undone." onConfirm={handleDelete} onCancel={() => setConfirmDelete(null)} />}
     {modal && <Modal title={modal === "new" ? "New Client" : "Edit Client"} onClose={() => setModal(null)} onSave={save}>
       <div className="form-group"><label>Name</label><input value={form.name || ""} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
       <div className="form-row"><div className="form-group"><label>Email</label><input value={form.email || ""} onChange={(e) => setForm({ ...form, email: e.target.value })} /></div><div className="form-group"><label>Phone</label><input value={form.phone || ""} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></div></div>
@@ -483,17 +596,31 @@ function ClientsPage({ clients, addClient, updateClient, removeClient }) {
 }
 
 // ─── Cases ───
-function CasesPage({ cases, clients, addCase, updateCase, removeCase }) {
+function CasesPage({ cases, clients, addCase, updateCase, removeCase, toast }) {
   const [modal, setModal] = useState(null); const [form, setForm] = useState({});
+  const [confirmDelete, setConfirmDelete] = useState(null);
   const openNew = () => { setForm({ clientId: clients[0]?.id || "", title: "", caseNumber: "", type: "Civil Litigation", status: "Active", priority: "Medium", description: "", openDate: new Date().toISOString().split("T")[0], dueDate: "" }); setModal("new"); };
   const openEdit = (c) => { setForm({ ...c }); setModal("edit"); };
-  const save = async () => { if (!form.title) return; if (modal === "new") await addCase(form); else await updateCase(form); setModal(null); };
+  const save = async () => {
+    if (!form.title) return;
+    try {
+      if (modal === "new") { await addCase(form); toast.show("Case created"); }
+      else { await updateCase(form); toast.show("Case updated"); }
+      setModal(null);
+    } catch (e) { toast.show("Error saving case", "error"); }
+  };
+  const handleDelete = async () => {
+    try { await removeCase(confirmDelete); toast.show("Case deleted"); } catch (e) { toast.show("Error deleting case", "error"); }
+    setConfirmDelete(null);
+  };
   const statusBadge = (s) => <span className={`badge ${({ Active: "badge-green", Pending: "badge-amber", Closed: "badge-blue" })[s] || "badge-purple"}`}>{s}</span>;
   return (<div>
     <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}><button className="btn btn-primary" onClick={openNew}>{Icons.plus}<span>New Case</span></button></div>
     <div className="card"><div className="table-wrap"><table><thead><tr><th>Case</th><th>Client</th><th>Type</th><th>Status</th><th>Priority</th><th>Due</th><th></th></tr></thead><tbody>
-      {cases.map((c) => { const cl = clients.find((x) => x.id === c.clientId); return (<tr key={c.id}><td><div style={{ fontWeight: 600 }}>{c.title}</div><div style={{ fontSize: 11, color: "var(--text-muted)" }}>{c.caseNumber}</div></td><td>{cl?.name || "—"}</td><td>{c.type}</td><td>{statusBadge(c.status)}</td><td><span className={`priority-dot ${c.priority}`} />{c.priority}</td><td style={{ color: "var(--text-secondary)", fontSize: 13 }}>{c.dueDate || "—"}</td><td><div className="actions-cell"><button className="btn-icon" onClick={() => openEdit(c)}>{Icons.edit}</button><button className="btn-icon btn-danger" onClick={() => removeCase(c.id)}>{Icons.trash}</button></div></td></tr>); })}
+      {cases.map((c) => { const cl = clients.find((x) => x.id === c.clientId); return (<tr key={c.id}><td><div style={{ fontWeight: 600 }}>{c.title}</div><div style={{ fontSize: 11, color: "var(--text-muted)" }}>{c.caseNumber}</div></td><td>{cl?.name || "—"}</td><td>{c.type}</td><td>{statusBadge(c.status)}</td><td><span className={`priority-dot ${c.priority}`} />{c.priority}</td><td style={{ color: "var(--text-secondary)", fontSize: 13 }}>{c.dueDate || "—"}</td><td><div className="actions-cell"><button className="btn-icon" onClick={() => openEdit(c)}>{Icons.edit}</button><button className="btn-icon btn-danger" onClick={() => setConfirmDelete(c.id)}>{Icons.trash}</button></div></td></tr>); })}
+      {cases.length === 0 && <tr><td colSpan={7} className="empty-state">No cases yet — create your first one</td></tr>}
     </tbody></table></div></div>
+    {confirmDelete && <ConfirmDialog title="Delete Case" message="Are you sure? This will permanently delete this case." onConfirm={handleDelete} onCancel={() => setConfirmDelete(null)} />}
     {modal && <Modal title={modal === "new" ? "New Case" : "Edit Case"} onClose={() => setModal(null)} onSave={save}>
       <div className="form-group"><label>Title</label><input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></div>
       <div className="form-row"><div className="form-group"><label>Case Number</label><input value={form.caseNumber} onChange={(e) => setForm({ ...form, caseNumber: e.target.value })} /></div><div className="form-group"><label>Client</label><select value={form.clientId} onChange={(e) => setForm({ ...form, clientId: e.target.value })}>{clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div></div>
@@ -505,12 +632,24 @@ function CasesPage({ cases, clients, addCase, updateCase, removeCase }) {
 }
 
 // ─── Tasks ───
-function TasksPage({ tasks, cases, addTask, updateTask, removeTask }) {
+function TasksPage({ tasks, cases, addTask, updateTask, removeTask, toast }) {
   const [modal, setModal] = useState(null); const [form, setForm] = useState({}); const [filter, setFilter] = useState("All");
+  const [confirmDelete, setConfirmDelete] = useState(null);
   const openNew = () => { setForm({ caseId: cases[0]?.id || "", title: "", status: "Todo", priority: "Medium", dueDate: "", notes: "" }); setModal("new"); };
   const openEdit = (t) => { setForm({ ...t }); setModal("edit"); };
-  const save = async () => { if (!form.title) return; if (modal === "new") await addTask(form); else await updateTask(form); setModal(null); };
-  const toggleDone = async (t) => { await updateTask({ ...t, status: t.status === "Done" ? "Todo" : "Done" }); };
+  const save = async () => {
+    if (!form.title) return;
+    try {
+      if (modal === "new") { await addTask(form); toast.show("Task added"); }
+      else { await updateTask(form); toast.show("Task updated"); }
+      setModal(null);
+    } catch (e) { toast.show("Error saving task", "error"); }
+  };
+  const toggleDone = async (t) => { try { await updateTask({ ...t, status: t.status === "Done" ? "Todo" : "Done" }); } catch (e) { toast.show("Error updating task", "error"); } };
+  const handleDelete = async () => {
+    try { await removeTask(confirmDelete); toast.show("Task deleted"); } catch (e) { toast.show("Error deleting task", "error"); }
+    setConfirmDelete(null);
+  };
   const filtered = tasks.filter((t) => filter === "All" || t.status === filter);
   return (<div>
     <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
@@ -518,9 +657,10 @@ function TasksPage({ tasks, cases, addTask, updateTask, removeTask }) {
       <button className="btn btn-primary" onClick={openNew}>{Icons.plus}<span>Add Task</span></button>
     </div>
     <div className="card"><div className="table-wrap"><table><thead><tr><th style={{ width: 36 }}></th><th>Task</th><th>Case</th><th>Priority</th><th>Status</th><th>Due</th><th></th></tr></thead><tbody>
-      {filtered.map((t) => { const cs = cases.find((c) => c.id === t.caseId); return (<tr key={t.id}><td><div className={`task-checkbox ${t.status === "Done" ? "done" : ""}`} onClick={() => toggleDone(t)} /></td><td><span style={t.status === "Done" ? { textDecoration: "line-through", color: "var(--text-muted)" } : { fontWeight: 500 }}>{t.title}</span></td><td style={{ fontSize: 12, color: "var(--text-secondary)" }}>{cs?.caseNumber || "—"}</td><td><span className={`priority-dot ${t.priority}`} />{t.priority}</td><td><span className={`badge ${t.status === "Done" ? "badge-green" : t.status === "In Progress" ? "badge-blue" : "badge-amber"}`}>{t.status}</span></td><td style={{ color: "var(--text-secondary)", fontSize: 13 }}>{t.dueDate}</td><td><div className="actions-cell"><button className="btn-icon" onClick={() => openEdit(t)}>{Icons.edit}</button><button className="btn-icon btn-danger" onClick={() => removeTask(t.id)}>{Icons.trash}</button></div></td></tr>); })}
+      {filtered.map((t) => { const cs = cases.find((c) => c.id === t.caseId); return (<tr key={t.id}><td><div className={`task-checkbox ${t.status === "Done" ? "done" : ""}`} onClick={() => toggleDone(t)} /></td><td><span style={t.status === "Done" ? { textDecoration: "line-through", color: "var(--text-muted)" } : { fontWeight: 500 }}>{t.title}</span></td><td style={{ fontSize: 12, color: "var(--text-secondary)" }}>{cs?.caseNumber || "—"}</td><td><span className={`priority-dot ${t.priority}`} />{t.priority}</td><td><span className={`badge ${t.status === "Done" ? "badge-green" : t.status === "In Progress" ? "badge-blue" : "badge-amber"}`}>{t.status}</span></td><td style={{ color: "var(--text-secondary)", fontSize: 13 }}>{t.dueDate}</td><td><div className="actions-cell"><button className="btn-icon" onClick={() => openEdit(t)}>{Icons.edit}</button><button className="btn-icon btn-danger" onClick={() => setConfirmDelete(t.id)}>{Icons.trash}</button></div></td></tr>); })}
       {filtered.length === 0 && <tr><td colSpan={7} className="empty-state">No tasks found</td></tr>}
     </tbody></table></div></div>
+    {confirmDelete && <ConfirmDialog title="Delete Task" message="Are you sure you want to delete this task?" onConfirm={handleDelete} onCancel={() => setConfirmDelete(null)} />}
     {modal && <Modal title={modal === "new" ? "New Task" : "Edit Task"} onClose={() => setModal(null)} onSave={save}>
       <div className="form-group"><label>Title</label><input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></div>
       <div className="form-row"><div className="form-group"><label>Case</label><select value={form.caseId} onChange={(e) => setForm({ ...form, caseId: e.target.value })}>{cases.map((c) => <option key={c.id} value={c.id}>{c.caseNumber} — {c.title}</option>)}</select></div><div className="form-group"><label>Priority</label><select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}>{["High","Medium","Low"].map((p) => <option key={p}>{p}</option>)}</select></div></div>
@@ -531,11 +671,24 @@ function TasksPage({ tasks, cases, addTask, updateTask, removeTask }) {
 }
 
 // ─── Billing ───
-function BillingPage({ billing, cases, addBilling, updateBilling, removeBilling }) {
+function BillingPage({ billing, cases, addBilling, updateBilling, removeBilling, toast }) {
   const [modal, setModal] = useState(null); const [form, setForm] = useState({});
+  const [confirmDelete, setConfirmDelete] = useState(null);
   const openNew = () => { setForm({ caseId: cases[0]?.id || "", description: "", hours: "", rate: 350, date: new Date().toISOString().split("T")[0], status: "Draft" }); setModal("new"); };
   const openEdit = (b) => { setForm({ ...b }); setModal("edit"); };
-  const save = async () => { if (!form.description) return; const e = { ...form, hours: parseFloat(form.hours) || 0, rate: parseFloat(form.rate) || 0 }; if (modal === "new") await addBilling(e); else await updateBilling(e); setModal(null); };
+  const save = async () => {
+    if (!form.description) return;
+    try {
+      const e = { ...form, hours: parseFloat(form.hours) || 0, rate: parseFloat(form.rate) || 0 };
+      if (modal === "new") { await addBilling(e); toast.show("Billing entry added"); }
+      else { await updateBilling(e); toast.show("Billing entry updated"); }
+      setModal(null);
+    } catch (e) { toast.show("Error saving billing entry", "error"); }
+  };
+  const handleDelete = async () => {
+    try { await removeBilling(confirmDelete); toast.show("Billing entry deleted"); } catch (e) { toast.show("Error deleting entry", "error"); }
+    setConfirmDelete(null);
+  };
   const fmt = (n) => "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2 });
   const totalBy = (s) => billing.filter((b) => b.status === s).reduce((sum, b) => sum + (b.hours || 0) * (b.rate || 0), 0);
   return (<div>
@@ -546,8 +699,9 @@ function BillingPage({ billing, cases, addBilling, updateBilling, removeBilling 
     </div>
     <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}><button className="btn btn-primary" onClick={openNew}>{Icons.plus}<span>Add Entry</span></button></div>
     <div className="card"><div className="table-wrap"><table><thead><tr><th>Date</th><th>Case</th><th>Description</th><th>Hours</th><th>Rate</th><th>Amount</th><th>Status</th><th></th></tr></thead><tbody>
-      {[...billing].sort((a, b) => (b.date || "").localeCompare(a.date || "")).map((b) => { const cs = cases.find((c) => c.id === b.caseId); return (<tr key={b.id}><td style={{ fontSize: 13, color: "var(--text-secondary)" }}>{b.date}</td><td style={{ fontSize: 12 }}>{cs?.caseNumber || "—"}</td><td style={{ fontWeight: 500 }}>{b.description}</td><td>{b.hours}h</td><td>{fmt(b.rate)}/hr</td><td style={{ fontWeight: 600 }}>{fmt((b.hours || 0) * (b.rate || 0))}</td><td><span className={`badge ${b.status === "Paid" ? "badge-green" : b.status === "Invoiced" ? "badge-amber" : "badge-blue"}`}>{b.status}</span></td><td><div className="actions-cell"><button className="btn-icon" onClick={() => openEdit(b)}>{Icons.edit}</button><button className="btn-icon btn-danger" onClick={() => removeBilling(b.id)}>{Icons.trash}</button></div></td></tr>); })}
+      {[...billing].sort((a, b) => (b.date || "").localeCompare(a.date || "")).map((b) => { const cs = cases.find((c) => c.id === b.caseId); return (<tr key={b.id}><td style={{ fontSize: 13, color: "var(--text-secondary)" }}>{b.date}</td><td style={{ fontSize: 12 }}>{cs?.caseNumber || "—"}</td><td style={{ fontWeight: 500 }}>{b.description}</td><td>{b.hours}h</td><td>{fmt(b.rate)}/hr</td><td style={{ fontWeight: 600 }}>{fmt((b.hours || 0) * (b.rate || 0))}</td><td><span className={`badge ${b.status === "Paid" ? "badge-green" : b.status === "Invoiced" ? "badge-amber" : "badge-blue"}`}>{b.status}</span></td><td><div className="actions-cell"><button className="btn-icon" onClick={() => openEdit(b)}>{Icons.edit}</button><button className="btn-icon btn-danger" onClick={() => setConfirmDelete(b.id)}>{Icons.trash}</button></div></td></tr>); })}
     </tbody></table></div></div>
+    {confirmDelete && <ConfirmDialog title="Delete Billing Entry" message="Are you sure you want to delete this billing entry?" onConfirm={handleDelete} onCancel={() => setConfirmDelete(null)} />}
     {modal && <Modal title={modal === "new" ? "New Billing Entry" : "Edit Entry"} onClose={() => setModal(null)} onSave={save}>
       <div className="form-group"><label>Description</label><input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
       <div className="form-row"><div className="form-group"><label>Case</label><select value={form.caseId} onChange={(e) => setForm({ ...form, caseId: e.target.value })}>{cases.map((c) => <option key={c.id} value={c.id}>{c.caseNumber} — {c.title}</option>)}</select></div><div className="form-group"><label>Date</label><input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></div></div>
@@ -653,6 +807,7 @@ export default function App() {
   const [profileLoading, setProfileLoading] = useState(true);
   const [page, setPage] = useState("dashboard");
   const [search, setSearch] = useState("");
+  const toast = useToast();
 
   // Auth listener
   useEffect(() => {
@@ -727,15 +882,16 @@ export default function App() {
           <div className="topbar"><h2>{titles[page]}</h2><div className="search-box">{Icons.search}<input placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)} /></div></div>
           <div className="content">
             {page === "dashboard" && <Dashboard clients={clients} cases={cases} tasks={tasks} billing={billing} events={events} setPage={setPage} />}
-            {page === "clients" && <ClientsPage clients={clients} addClient={addClient} updateClient={updateClient} removeClient={removeClient} />}
-            {page === "cases" && <CasesPage cases={cases} clients={clients} addCase={addCase} updateCase={updateCase} removeCase={removeCase} />}
-            {page === "tasks" && <TasksPage tasks={tasks} cases={cases} addTask={addTask} updateTask={updateTask} removeTask={removeTask} />}
-            {page === "billing" && <BillingPage billing={billing} cases={cases} addBilling={addBilling} updateBilling={updateBilling} removeBilling={removeBilling} />}
+            {page === "clients" && <ClientsPage clients={clients} addClient={addClient} updateClient={updateClient} removeClient={removeClient} toast={toast} />}
+            {page === "cases" && <CasesPage cases={cases} clients={clients} addCase={addCase} updateCase={updateCase} removeCase={removeCase} toast={toast} />}
+            {page === "tasks" && <TasksPage tasks={tasks} cases={cases} addTask={addTask} updateTask={updateTask} removeTask={removeTask} toast={toast} />}
+            {page === "billing" && <BillingPage billing={billing} cases={cases} addBilling={addBilling} updateBilling={updateBilling} removeBilling={removeBilling} toast={toast} />}
             {page === "calendar" && <CalendarPage events={events} cases={cases} addEvent={addEvent} updateEvent={updateEvent} />}
             {page === "team" && firm && <TeamPage firm={firm} userRole={userRole} user={user} />}
           </div>
         </div>
       </div>
+      <toast.ToastContainer />
     </>
   );
 }
