@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { auth, db } from "./firebase";
+import { useState, useEffect, useRef } from "react";
+import { auth, db, storage } from "./firebase";
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
@@ -17,10 +17,17 @@ import {
   deleteDoc,
   query,
   where,
+  orderBy,
   onSnapshot,
   arrayUnion,
   arrayRemove,
 } from "firebase/firestore";
+import {
+  ref,
+  uploadBytes,
+  getDownloadURL,
+  deleteObject,
+} from "firebase/storage";
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const inviteCode = () => Math.random().toString(36).slice(2, 8).toUpperCase();
@@ -45,6 +52,13 @@ const Icons = {
   copy: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>,
   building: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="2" width="16" height="20" rx="2" ry="2"/><path d="M9 22v-4h6v4"/><line x1="8" y1="6" x2="10" y2="6"/><line x1="14" y1="6" x2="16" y2="6"/><line x1="8" y1="10" x2="10" y2="10"/><line x1="14" y1="10" x2="16" y2="10"/><line x1="8" y1="14" x2="10" y2="14"/><line x1="14" y1="14" x2="16" y2="14"/></svg>,
   userRemove: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="18" y1="8" x2="23" y2="13"/><line x1="23" y1="8" x2="18" y2="13"/></svg>,
+  file: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>,
+  upload: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>,
+  download: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
+  note: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>,
+  back: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>,
+  eye: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>,
+  lock: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>,
 };
 
 // ─── CSS ───
@@ -263,6 +277,62 @@ tbody tr:last-child td { border-bottom: none; }
 .confirm-actions { display: flex; gap: 10px; justify-content: center; }
 .btn-danger-solid { background: var(--red); border-color: var(--red); color: #fff; }
 .btn-danger-solid:hover { background: #dc2626; }
+
+/* Case Detail View */
+.case-detail-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 24px; }
+.case-detail-header .back-btn { display: flex; align-items: center; gap: 6px; background: none; border: none; color: var(--text-secondary); cursor: pointer; font-family: var(--font); font-size: 13px; padding: 6px 0; margin-bottom: 12px; }
+.case-detail-header .back-btn:hover { color: var(--text); }
+.case-detail-header .back-btn svg { width: 18px; height: 18px; }
+.case-detail-title h2 { font-family: var(--font-display); font-size: 22px; margin-bottom: 4px; }
+.case-detail-title .case-meta { font-size: 13px; color: var(--text-secondary); display: flex; gap: 16px; flex-wrap: wrap; }
+.case-detail-title .case-meta span { display: flex; align-items: center; gap: 4px; }
+
+.tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+.tab { padding: 12px 20px; font-size: 13px; font-weight: 500; color: var(--text-muted); cursor: pointer; border: none; background: none; font-family: var(--font); border-bottom: 2px solid transparent; transition: all 0.15s; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* Document Upload */
+.drop-zone { border: 2px dashed var(--border-light); border-radius: var(--radius); padding: 40px; text-align: center; cursor: pointer; transition: all 0.2s; background: var(--bg); }
+.drop-zone:hover, .drop-zone.dragging { border-color: var(--accent); background: var(--accent-soft); }
+.drop-zone svg { width: 36px; height: 36px; color: var(--text-muted); margin-bottom: 12px; }
+.drop-zone p { font-size: 14px; color: var(--text-secondary); margin-bottom: 4px; }
+.drop-zone .hint { font-size: 11px; color: var(--text-muted); }
+.doc-item { display: flex; align-items: center; gap: 14px; padding: 14px 20px; border-bottom: 1px solid var(--border); }
+.doc-item:last-child { border-bottom: none; }
+.doc-icon { width: 40px; height: 40px; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.doc-icon svg { width: 20px; height: 20px; }
+.doc-icon.pdf { background: var(--red-soft); color: var(--red); }
+.doc-icon.doc { background: var(--blue-soft); color: var(--blue); }
+.doc-icon.img { background: var(--green-soft); color: var(--green); }
+.doc-icon.other { background: var(--accent-soft); color: var(--accent); }
+.doc-info { flex: 1; min-width: 0; }
+.doc-info h4 { font-size: 13.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.doc-info p { font-size: 11.5px; color: var(--text-secondary); margin-top: 2px; }
+.doc-tag { font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+.upload-progress { height: 4px; background: var(--border); border-radius: 2px; margin-top: 8px; overflow: hidden; }
+.upload-progress-bar { height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.3s; }
+
+/* Notes / Activity Log */
+.note-input-area { margin-bottom: 20px; }
+.note-input-area textarea { width: 100%; padding: 12px 16px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-family: var(--font); font-size: 13px; min-height: 80px; outline: none; resize: vertical; }
+.note-input-area textarea:focus { border-color: var(--accent); }
+.note-input-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
+.note-input-actions .privacy-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); cursor: pointer; }
+.note-input-actions .privacy-toggle svg { width: 14px; height: 14px; }
+.note-item { display: flex; gap: 14px; padding: 16px 0; border-bottom: 1px solid var(--border); }
+.note-item:last-child { border-bottom: none; }
+.note-avatar { width: 32px; height: 32px; border-radius: 50%; background: var(--accent-soft); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: var(--accent); flex-shrink: 0; margin-top: 2px; }
+.note-content { flex: 1; }
+.note-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.note-header .author { font-size: 12px; font-weight: 600; }
+.note-header .time { font-size: 11px; color: var(--text-muted); }
+.note-header .private-badge { font-size: 10px; color: var(--amber); display: flex; align-items: center; gap: 3px; }
+.note-header .private-badge svg { width: 12px; height: 12px; }
+.note-text { font-size: 13px; color: var(--text-secondary); line-height: 1.5; white-space: pre-wrap; }
+.note-type-badge { font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 600; margin-bottom: 4px; display: inline-block; }
+.note-type-badge.activity { background: var(--blue-soft); color: var(--blue); }
+.note-type-badge.note { background: var(--accent-soft); color: var(--accent); }
 
 @media (max-width: 900px) {
   .sidebar { width: 64px; min-width: 64px; }
@@ -596,9 +666,10 @@ function ClientsPage({ clients, addClient, updateClient, removeClient, toast }) 
 }
 
 // ─── Cases ───
-function CasesPage({ cases, clients, addCase, updateCase, removeCase, toast }) {
+function CasesPage({ cases, clients, addCase, updateCase, removeCase, toast, firmId, user }) {
   const [modal, setModal] = useState(null); const [form, setForm] = useState({});
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [selectedCase, setSelectedCase] = useState(null);
   const openNew = () => { setForm({ clientId: clients[0]?.id || "", title: "", caseNumber: "", type: "Civil Litigation", status: "Active", priority: "Medium", description: "", openDate: new Date().toISOString().split("T")[0], dueDate: "" }); setModal("new"); };
   const openEdit = (c) => { setForm({ ...c }); setModal("edit"); };
   const save = async () => {
@@ -614,10 +685,16 @@ function CasesPage({ cases, clients, addCase, updateCase, removeCase, toast }) {
     setConfirmDelete(null);
   };
   const statusBadge = (s) => <span className={`badge ${({ Active: "badge-green", Pending: "badge-amber", Closed: "badge-blue" })[s] || "badge-purple"}`}>{s}</span>;
+
+  if (selectedCase) {
+    const client = clients.find((c) => c.id === selectedCase.clientId);
+    return <CaseDetailPage caseData={selectedCase} client={client} firmId={firmId} user={user} toast={toast} onBack={() => setSelectedCase(null)} />;
+  }
+
   return (<div>
     <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}><button className="btn btn-primary" onClick={openNew}>{Icons.plus}<span>New Case</span></button></div>
     <div className="card"><div className="table-wrap"><table><thead><tr><th>Case</th><th>Client</th><th>Type</th><th>Status</th><th>Priority</th><th>Due</th><th></th></tr></thead><tbody>
-      {cases.map((c) => { const cl = clients.find((x) => x.id === c.clientId); return (<tr key={c.id}><td><div style={{ fontWeight: 600 }}>{c.title}</div><div style={{ fontSize: 11, color: "var(--text-muted)" }}>{c.caseNumber}</div></td><td>{cl?.name || "—"}</td><td>{c.type}</td><td>{statusBadge(c.status)}</td><td><span className={`priority-dot ${c.priority}`} />{c.priority}</td><td style={{ color: "var(--text-secondary)", fontSize: 13 }}>{c.dueDate || "—"}</td><td><div className="actions-cell"><button className="btn-icon" onClick={() => openEdit(c)}>{Icons.edit}</button><button className="btn-icon btn-danger" onClick={() => setConfirmDelete(c.id)}>{Icons.trash}</button></div></td></tr>); })}
+      {cases.map((c) => { const cl = clients.find((x) => x.id === c.clientId); return (<tr key={c.id}><td><div style={{ fontWeight: 600, cursor: "pointer", color: "var(--accent)" }} onClick={() => setSelectedCase(c)}>{c.title}</div><div style={{ fontSize: 11, color: "var(--text-muted)" }}>{c.caseNumber}</div></td><td>{cl?.name || "—"}</td><td>{c.type}</td><td>{statusBadge(c.status)}</td><td><span className={`priority-dot ${c.priority}`} />{c.priority}</td><td style={{ color: "var(--text-secondary)", fontSize: 13 }}>{c.dueDate || "—"}</td><td><div className="actions-cell"><button className="btn-icon" onClick={() => openEdit(c)}>{Icons.edit}</button><button className="btn-icon btn-danger" onClick={() => setConfirmDelete(c.id)}>{Icons.trash}</button></div></td></tr>); })}
       {cases.length === 0 && <tr><td colSpan={7} className="empty-state">No cases yet — create your first one</td></tr>}
     </tbody></table></div></div>
     {confirmDelete && <ConfirmDialog title="Delete Case" message="Are you sure? This will permanently delete this case." onConfirm={handleDelete} onCancel={() => setConfirmDelete(null)} />}
@@ -709,6 +786,214 @@ function BillingPage({ billing, cases, addBilling, updateBilling, removeBilling,
       <div className="form-group"><label>Status</label><select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>{["Draft","Invoiced","Paid"].map((s) => <option key={s}>{s}</option>)}</select></div>
     </Modal>}
   </div>);
+}
+
+// ─── Case Detail Page (Documents + Notes) ───
+function CaseDetailPage({ caseData, client, firmId, user, toast, onBack }) {
+  const [tab, setTab] = useState("notes");
+  const [docs, setDocs] = useState([]);
+  const [notes, setNotes] = useState([]);
+  const [noteText, setNoteText] = useState("");
+  const [isPrivate, setIsPrivate] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [docTag, setDocTag] = useState("General");
+  const [confirmDeleteDoc, setConfirmDeleteDoc] = useState(null);
+  const fileInputRef = useRef(null);
+
+  // Load documents
+  useEffect(() => {
+    if (!caseData?.id || !firmId) return;
+    const q = query(collection(db, "documents"), where("caseId", "==", caseData.id), where("firmId", "==", firmId));
+    const unsub = onSnapshot(q, (snap) => setDocs(snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (b.uploadedAt || "").localeCompare(a.uploadedAt || ""))));
+    return () => unsub();
+  }, [caseData?.id, firmId]);
+
+  // Load notes
+  useEffect(() => {
+    if (!caseData?.id || !firmId) return;
+    const q = query(collection(db, "caseNotes"), where("caseId", "==", caseData.id), where("firmId", "==", firmId));
+    const unsub = onSnapshot(q, (snap) => setNotes(snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))));
+    return () => unsub();
+  }, [caseData?.id, firmId]);
+
+  const getFileType = (name) => {
+    const ext = name?.split(".").pop()?.toLowerCase();
+    if (["pdf"].includes(ext)) return "pdf";
+    if (["doc", "docx"].includes(ext)) return "doc";
+    if (["jpg", "jpeg", "png", "gif", "webp"].includes(ext)) return "img";
+    return "other";
+  };
+
+  const formatFileSize = (bytes) => {
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / 1048576).toFixed(1) + " MB";
+  };
+
+  const handleUpload = async (files) => {
+    if (!files?.length) return;
+    setUploading(true);
+    try {
+      for (const file of files) {
+        if (file.size > 10 * 1024 * 1024) { toast.show(`${file.name} is too large (max 10MB)`, "error"); continue; }
+        const fileId = uid();
+        const storagePath = `firms/${firmId}/cases/${caseData.id}/${fileId}_${file.name}`;
+        const storageRef = ref(storage, storagePath);
+        await uploadBytes(storageRef, file);
+        const downloadURL = await getDownloadURL(storageRef);
+        await setDoc(doc(db, "documents", fileId), {
+          id: fileId, firmId, caseId: caseData.id,
+          name: file.name, size: file.size, type: file.type,
+          tag: docTag, storagePath, downloadURL,
+          uploadedBy: user.email, uploadedAt: new Date().toISOString(),
+        });
+        // Auto-log activity
+        await addNote(`Uploaded document: ${file.name}`, "activity", false);
+      }
+      toast.show(`${files.length} file(s) uploaded`);
+    } catch (e) { console.error(e); toast.show("Error uploading file", "error"); }
+    setUploading(false);
+  };
+
+  const deleteDocument = async () => {
+    if (!confirmDeleteDoc) return;
+    try {
+      const docData = docs.find((d) => d.id === confirmDeleteDoc);
+      if (docData?.storagePath) {
+        try { await deleteObject(ref(storage, docData.storagePath)); } catch (e) { /* file may already be deleted */ }
+      }
+      await deleteDoc(doc(db, "documents", confirmDeleteDoc));
+      toast.show("Document deleted");
+    } catch (e) { toast.show("Error deleting document", "error"); }
+    setConfirmDeleteDoc(null);
+  };
+
+  const addNote = async (text, type = "note", showToast = true) => {
+    if (!text?.trim()) return;
+    const noteId = uid();
+    await setDoc(doc(db, "caseNotes", noteId), {
+      id: noteId, firmId, caseId: caseData.id,
+      text: text.trim(), type,
+      isPrivate: type === "note" ? isPrivate : false,
+      author: user.email,
+      createdAt: new Date().toISOString(),
+    });
+    if (showToast && type === "note") { toast.show("Note added"); setNoteText(""); }
+  };
+
+  const handleSubmitNote = async () => {
+    if (!noteText.trim()) return;
+    try { await addNote(noteText); } catch (e) { toast.show("Error adding note", "error"); }
+  };
+
+  const deleteNote = async (noteId) => {
+    try { await deleteDoc(doc(db, "caseNotes", noteId)); toast.show("Note deleted"); } catch (e) { toast.show("Error deleting note", "error"); }
+  };
+
+  const handleDrop = (e) => { e.preventDefault(); setDragging(false); handleUpload(e.dataTransfer.files); };
+  const handleDragOver = (e) => { e.preventDefault(); setDragging(true); };
+  const handleDragLeave = () => setDragging(false);
+
+  const statusColors = { Active: "badge-green", Pending: "badge-amber", Closed: "badge-blue", New: "badge-purple", "In Progress": "badge-blue", "Awaiting Client": "badge-amber", "In Court": "badge-red" };
+
+  return (
+    <div>
+      <div className="case-detail-header">
+        <div className="case-detail-title">
+          <button className="back-btn" onClick={onBack}>{Icons.back} Back to Cases</button>
+          <h2>{caseData.title}</h2>
+          <div className="case-meta">
+            <span>{caseData.caseNumber}</span>
+            <span><span className={`badge ${statusColors[caseData.status] || "badge-purple"}`}>{caseData.status}</span></span>
+            <span>{caseData.type}</span>
+            {client && <span>Client: {client.name}</span>}
+            {caseData.dueDate && <span>Due: {caseData.dueDate}</span>}
+          </div>
+        </div>
+      </div>
+
+      <div className="tabs">
+        <button className={`tab ${tab === "notes" ? "active" : ""}`} onClick={() => setTab("notes")}>{Icons.note} Notes & Activity ({notes.length})</button>
+        <button className={`tab ${tab === "documents" ? "active" : ""}`} onClick={() => setTab("documents")}>{Icons.file} Documents ({docs.length})</button>
+      </div>
+
+      {tab === "documents" && (
+        <div>
+          <div style={{ display: "flex", gap: 10, marginBottom: 16, alignItems: "center" }}>
+            <select value={docTag} onChange={(e) => setDocTag(e.target.value)} style={{ padding: "8px 12px", background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", color: "var(--text)", fontFamily: "var(--font)", fontSize: 13 }}>
+              {["General", "Contract", "Claim", "Evidence", "Invoice", "Correspondence", "Court Filing", "Other"].map((t) => <option key={t}>{t}</option>)}
+            </select>
+            <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Tag for new uploads</span>
+          </div>
+
+          <div className={`drop-zone ${dragging ? "dragging" : ""}`} onDrop={handleDrop} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onClick={() => fileInputRef.current?.click()}>
+            {Icons.upload}
+            <p>{uploading ? "Uploading..." : "Drop files here or click to browse"}</p>
+            <div className="hint">PDF, Word, Images — Max 10MB per file</div>
+            <input ref={fileInputRef} type="file" multiple style={{ display: "none" }} onChange={(e) => { handleUpload(e.target.files); e.target.value = ""; }} />
+          </div>
+
+          <div className="card" style={{ marginTop: 16 }}>
+            <div className="card-header"><h3>Documents</h3></div>
+            <div className="card-body">
+              {docs.length === 0 && <div className="empty-state">No documents yet — upload your first file</div>}
+              {docs.map((d) => (
+                <div className="doc-item" key={d.id}>
+                  <div className={`doc-icon ${getFileType(d.name)}`}>{Icons.file}</div>
+                  <div className="doc-info">
+                    <h4>{d.name}</h4>
+                    <p>{formatFileSize(d.size)} · {d.uploadedBy} · {d.uploadedAt?.split("T")[0]}</p>
+                  </div>
+                  <span className={`badge ${d.tag === "Evidence" ? "badge-red" : d.tag === "Contract" ? "badge-blue" : d.tag === "Invoice" ? "badge-green" : "badge-purple"}`}>{d.tag}</span>
+                  <a href={d.downloadURL} target="_blank" rel="noopener noreferrer" className="btn-icon" title="Download">{Icons.download}</a>
+                  <button className="btn-icon btn-danger" onClick={() => setConfirmDeleteDoc(d.id)} title="Delete">{Icons.trash}</button>
+                </div>
+              ))}
+            </div>
+          </div>
+          {confirmDeleteDoc && <ConfirmDialog title="Delete Document" message="This will permanently delete this document." onConfirm={deleteDocument} onCancel={() => setConfirmDeleteDoc(null)} />}
+        </div>
+      )}
+
+      {tab === "notes" && (
+        <div>
+          <div className="note-input-area">
+            <textarea value={noteText} onChange={(e) => setNoteText(e.target.value)} placeholder="Add a note about this case..." onKeyDown={(e) => { if (e.key === "Enter" && e.ctrlKey) handleSubmitNote(); }} />
+            <div className="note-input-actions">
+              <label className="privacy-toggle" onClick={() => setIsPrivate(!isPrivate)} style={{ cursor: "pointer" }}>
+                {isPrivate ? Icons.lock : Icons.eye}
+                <span>{isPrivate ? "Private (only you)" : "Visible to team"}</span>
+              </label>
+              <button className="btn btn-primary btn-sm" onClick={handleSubmitNote}>Add Note</button>
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="card-header"><h3>Activity & Notes</h3></div>
+            <div className="card-body" style={{ padding: "0 20px" }}>
+              {notes.length === 0 && <div className="empty-state">No notes yet — add the first one</div>}
+              {notes.map((n) => (
+                <div className="note-item" key={n.id}>
+                  <div className="note-avatar">{n.author?.[0]?.toUpperCase()}</div>
+                  <div className="note-content">
+                    <div className="note-header">
+                      <span className="author">{n.author}</span>
+                      <span className="time">{n.createdAt ? new Date(n.createdAt).toLocaleString() : ""}</span>
+                      {n.isPrivate && <span className="private-badge">{Icons.lock} Private</span>}
+                    </div>
+                    <span className={`note-type-badge ${n.type}`}>{n.type === "activity" ? "Activity" : "Note"}</span>
+                    <div className="note-text">{n.text}</div>
+                  </div>
+                  {n.type === "note" && <button className="btn-icon btn-danger" onClick={() => deleteNote(n.id)} style={{ alignSelf: "flex-start" }}>{Icons.trash}</button>}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ─── Calendar ───
@@ -883,7 +1168,7 @@ export default function App() {
           <div className="content">
             {page === "dashboard" && <Dashboard clients={clients} cases={cases} tasks={tasks} billing={billing} events={events} setPage={setPage} />}
             {page === "clients" && <ClientsPage clients={clients} addClient={addClient} updateClient={updateClient} removeClient={removeClient} toast={toast} />}
-            {page === "cases" && <CasesPage cases={cases} clients={clients} addCase={addCase} updateCase={updateCase} removeCase={removeCase} toast={toast} />}
+            {page === "cases" && <CasesPage cases={cases} clients={clients} addCase={addCase} updateCase={updateCase} removeCase={removeCase} toast={toast} firmId={firmId} user={user} />}
             {page === "tasks" && <TasksPage tasks={tasks} cases={cases} addTask={addTask} updateTask={updateTask} removeTask={removeTask} toast={toast} />}
             {page === "billing" && <BillingPage billing={billing} cases={cases} addBilling={addBilling} updateBilling={updateBilling} removeBilling={removeBilling} toast={toast} />}
             {page === "calendar" && <CalendarPage events={events} cases={cases} addEvent={addEvent} updateEvent={updateEvent} />}
